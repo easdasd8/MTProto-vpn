@@ -37,6 +37,9 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"golang.org/x/crypto/pbkdf2"
+	"encoding/json"
+	"os/exec"
+	"path/filepath"
 )
 
 // ============================================================================
@@ -94,6 +97,18 @@ type VPNClient struct {
 	statsCallback  func(uint64, uint64)
 }
 
+// AppConfig конфигурация приложения (сохраняемые настройки)
+type AppConfig struct {
+	ServerAddr   string `json:"server_addr"`
+	Port         string `json:"port"`
+	DC           int    `json:"dc"`
+	AuthKey      string `json:"auth_key"`
+	UseProxy     bool   `json:"use_proxy"`
+	ProxyAddr    string `json:"proxy_addr"`
+	AutoConnect  bool   `json:"auto_connect"`
+	DarkTheme    bool   `json:"dark_theme"`
+}
+
 // UIState состояние интерфейса
 type UIState struct {
 	serverEntry    *widget.Entry
@@ -107,6 +122,178 @@ type UIState struct {
 	logText        *widget.Entry
 	isConnected    bool
 	darkTheme      bool
+	appConfig      *AppConfig
+	configFile     string
+}
+
+// ============================================================================
+// MTProto Криптография
+// ============================================================================
+
+// ============================================================================
+// СИСТЕМА КОНФИГУРАЦИИ
+// ============================================================================
+
+// getConfigPath возвращает путь к файлу конфигурации
+func getConfigPath() (string, error) {
+	// Для Windows используем AppData
+	if os.PathSeparator == '\\' {
+		appData := os.Getenv("APPDATA")
+		if appData == "" {
+			return "", errors.New("APPDATA not set")
+		}
+		dir := filepath.Join(appData, "MTProtoVPN")
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return "", err
+		}
+		return filepath.Join(dir, "config.json"), nil
+	}
+	
+	// Для Linux/Mac используем домашнюю директорию
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, ".mtproto_vpn")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "config.json"), nil
+}
+
+// LoadConfig загружает конфигурацию из файла
+func LoadConfig() (*AppConfig, string, error) {
+	configPath, err := getConfigPath()
+	if err != nil {
+		// Возвращаем конфигурацию по умолчанию
+		return getDefaultConfig(), "", err
+	}
+	
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Файл не существует, создаем конфигурацию по умолчанию
+			return getDefaultConfig(), configPath, nil
+		}
+		return getDefaultConfig(), configPath, err
+	}
+	
+	var config AppConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return getDefaultConfig(), configPath, err
+	}
+	
+	return &config, configPath, nil
+}
+
+// SaveConfig сохраняет конфигурацию в файл
+func SaveConfig(config *AppConfig, configPath string) error {
+	if configPath == "" {
+		var err error
+		configPath, err = getConfigPath()
+		if err != nil {
+			return err
+		}
+	}
+	
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
+	}
+	
+	return os.WriteFile(configPath, data, 0644)
+}
+
+// getDefaultConfig возвращает конфигурацию по умолчанию
+func getDefaultConfig() *AppConfig {
+	return &AppConfig{
+		ServerAddr:  "149.154.167.50",
+		Port:        "443",
+		DC:          2,
+		AuthKey:     "",
+		UseProxy:    false,
+		ProxyAddr:   "",
+		AutoConnect: false,
+		DarkTheme:   true,
+	}
+}
+
+// ValidateConfig проверяет корректность конфигурации
+func ValidateConfig(config *AppConfig) error {
+	if config.ServerAddr == "" {
+		return errors.New("server address is required")
+	}
+	
+	if config.Port == "" {
+		return errors.New("port is required")
+	}
+	
+	if _, err := strconv.Atoi(config.Port); err != nil {
+		return errors.New("invalid port number")
+	}
+	
+	if config.DC < 1 || config.DC > 5 {
+		return errors.New("DC must be between 1 and 5")
+	}
+	
+	return nil
+}
+
+// ImportConfig импортирует конфигурацию из строки (например, из clipboard)
+func ImportConfig(configStr string) (*AppConfig, error) {
+	var config AppConfig
+	
+	// Пробуем распарсить как JSON
+	if err := json.Unmarshal([]byte(configStr), &config); err == nil {
+		return &config, nil
+	}
+	
+	// Пробуем распарсить как URL формат: mtproto://server:port?dc=X&authkey=Y
+	if strings.HasPrefix(configStr, "mtproto://") {
+		u, err := url.Parse(configStr)
+		if err != nil {
+			return nil, err
+		}
+		
+		config.ServerAddr = u.Hostname()
+		config.Port = u.Port()
+		if config.Port == "" {
+			config.Port = "443"
+		}
+		
+		dc := u.Query().Get("dc")
+		if dc != "" {
+			config.DC, _ = strconv.Atoi(dc)
+		} else {
+			config.DC = 2
+		}
+		
+		config.AuthKey = u.Query().Get("authkey")
+		config.UseProxy, _ = strconv.ParseBool(u.Query().Get("proxy"))
+		config.ProxyAddr = u.Query().Get("proxyaddr")
+		
+		return &config, nil
+	}
+	
+	// Пробуем распарсить как простой формат: server:port:dc:authkey
+	parts := strings.Split(configStr, ":")
+	if len(parts) >= 3 {
+		config.ServerAddr = parts[0]
+		config.Port = parts[1]
+		config.DC, _ = strconv.Atoi(parts[2])
+		if len(parts) >= 4 {
+			config.AuthKey = parts[3]
+		}
+		return &config, nil
+	}
+	
+	return nil, errors.New("unable to parse config string")
+}
+
+// ExportConfig экспортирует конфигурацию в строку
+func ExportConfig(config *AppConfig) string {
+	data, _ := json.MarshalIndent(config, "", "  ")
+	return string(data)
 }
 
 // ============================================================================
@@ -561,6 +748,11 @@ func createMainWindow(vpnClient *VPNClient) fyne.Window {
 
 // createMainContent создает основной контент окна
 func createMainContent(window fyne.Window, vpnClient *VPNClient, uiState *UIState) fyne.CanvasObject {
+	// Загружаем конфигурацию
+	config, configPath, _ := LoadConfig()
+	uiState.appConfig = config
+	uiState.configFile = configPath
+	
 	// Заголовок
 	titleLabel := widget.NewLabel("MTProto VPN Client")
 	titleLabel.TextStyle = fyne.TextStyle{Bold: true}
@@ -577,22 +769,22 @@ func createMainContent(window fyne.Window, vpnClient *VPNClient, uiState *UIStat
 	logoIcon.TextSize = 64
 	logoIcon.Alignment = fyne.TextAlignCenter
 	
-	// Поля ввода
+	// Поля ввода с загруженными значениями
 	uiState.serverEntry = widget.NewEntry()
-	uiState.serverEntry.SetPlaceHolder("Server Address (e.g., 149.154.167.50:443)")
-	uiState.serverEntry.SetText(DefaultServerAddr)
+	uiState.serverEntry.SetPlaceHolder("Server Address (e.g., 149.154.167.50)")
+	uiState.serverEntry.SetText(config.ServerAddr)
 	
 	uiState.portEntry = widget.NewEntry()
 	uiState.portEntry.SetPlaceHolder("Port")
-	uiState.portEntry.SetText("443")
-	uiState.portEntry.Disable() // Порт включен в адрес сервера
+	uiState.portEntry.SetText(config.Port)
 	
 	uiState.dcEntry = widget.NewEntry()
 	uiState.dcEntry.SetPlaceHolder("Data Center ID")
-	uiState.dcEntry.SetText("2")
+	uiState.dcEntry.SetText(strconv.Itoa(config.DC))
 	
 	uiState.authKeyEntry = widget.NewEntry()
 	uiState.authKeyEntry.SetPlaceHolder("Auth Key (hex, optional)")
+	uiState.authKeyEntry.SetText(config.AuthKey)
 	uiState.authKeyEntry.MultiLine = true
 	uiState.authKeyEntry.Wrapping = fyne.TextWrapWord
 	
@@ -626,6 +818,7 @@ func createMainContent(window fyne.Window, vpnClient *VPNClient, uiState *UIStat
 	settingsCard := container.NewVBox(
 		widget.NewForm(
 			widget.NewFormItem("Server", uiState.serverEntry),
+			widget.NewFormItem("Port", uiState.portEntry),
 			widget.NewFormItem("DC", uiState.dcEntry),
 			widget.NewFormItem("Auth Key", uiState.authKeyEntry),
 		),
@@ -638,6 +831,25 @@ func createMainContent(window fyne.Window, vpnClient *VPNClient, uiState *UIStat
 		layout.NewSpacer(),
 	)
 	
+	// Кнопки конфигурации
+	configBtn := widget.NewButtonWithIcon("⚙️ Config", theme.SettingsResource(), func() {
+		showConfigDialog(window, uiState)
+	})
+	
+	importBtn := widget.NewButtonWithIcon("📥 Import", theme.DocumentCreateResource(), func() {
+		showImportDialog(window, uiState)
+	})
+	
+	exportBtn := widget.NewButtonWithIcon("📤 Export", theme.DocumentSaveResource(), func() {
+		showExportDialog(window, uiState)
+	})
+	
+	configButtonRow := container.NewHBox(
+		configBtn,
+		importBtn,
+		exportBtn,
+	)
+	
 	// Основной контент с прокруткой
 	scrollContent := container.NewVScroll(
 		container.NewVBox(
@@ -648,6 +860,8 @@ func createMainContent(window fyne.Window, vpnClient *VPNClient, uiState *UIStat
 			layout.NewSpacer(),
 			widget.NewSeparator(),
 			settingsCard,
+			widget.NewSeparator(),
+			configButtonRow,
 			widget.NewSeparator(),
 			buttonRow,
 			widget.NewSeparator(),
@@ -675,11 +889,18 @@ func onConnectClick(vpnClient *VPNClient, uiState *UIState, window fyne.Window) 
 		uiState.connectBtn.SetText("Connect")
 		uiState.progressBar.Hide()
 		appendLog(uiState.logText, "Disconnecting...")
+		
+		// Сохраняем конфигурацию при отключении
+		saveCurrentConfig(uiState)
 	} else {
 		// Подключаемся
 		serverAddr := uiState.serverEntry.Text
+		port := uiState.portEntry.Text
 		dcStr := uiState.dcEntry.Text
 		authKey := uiState.authKeyEntry.Text
+		
+		// Формируем полный адрес
+		fullServerAddr := serverAddr + ":" + port
 		
 		dc, err := strconv.Atoi(dcStr)
 		if err != nil {
@@ -687,15 +908,23 @@ func onConnectClick(vpnClient *VPNClient, uiState *UIState, window fyne.Window) 
 			return
 		}
 		
+		// Обновляем конфигурацию
+		if uiState.appConfig != nil {
+			uiState.appConfig.ServerAddr = serverAddr
+			uiState.appConfig.Port = port
+			uiState.appConfig.DC = dc
+			uiState.appConfig.AuthKey = authKey
+		}
+		
 		uiState.connectBtn.SetText("Connecting...")
 		uiState.connectBtn.Disable()
 		uiState.progressBar.Show()
 		uiState.progressBar.SetValue(0.5)
-		appendLog(uiState.logText, fmt.Sprintf("Connecting to %s (DC: %d)...", serverAddr, dc))
+		appendLog(uiState.logText, fmt.Sprintf("Connecting to %s (DC: %d)...", fullServerAddr, dc))
 		
 		// Запускаем подключение в горутине
 		go func() {
-			err := vpnClient.Connect(serverAddr, authKey, dc)
+			err := vpnClient.Connect(fullServerAddr, authKey, dc)
 			
 			fyne.Do(func() {
 				uiState.connectBtn.Enable()
@@ -707,10 +936,28 @@ func onConnectClick(vpnClient *VPNClient, uiState *UIState, window fyne.Window) 
 				} else {
 					uiState.connectBtn.SetText("Disconnect")
 					appendLog(uiState.logText, "Connected successfully!")
+					
+					// Сохраняем конфигурацию после успешного подключения
+					saveCurrentConfig(uiState)
 				}
 			})
 		}()
 	}
+}
+
+// saveCurrentConfig сохраняет текущую конфигурацию
+func saveCurrentConfig(uiState *UIState) {
+	if uiState.appConfig == nil {
+		return
+	}
+	
+	uiState.appConfig.ServerAddr = uiState.serverEntry.Text
+	uiState.appConfig.Port = uiState.portEntry.Text
+	dc, _ := strconv.Atoi(uiState.dcEntry.Text)
+	uiState.appConfig.DC = dc
+	uiState.appConfig.AuthKey = uiState.authKeyEntry.Text
+	
+	SaveConfig(uiState.appConfig, uiState.configFile)
 }
 
 // updateConnectionStatus обновляет статус подключения
@@ -941,6 +1188,170 @@ func (h *HTTPProxyHandler) TestConnection() error {
 	}
 	
 	return nil
+}
+
+// ============================================================================
+// ДИАЛОГИ КОНФИГУРАЦИИ
+// ============================================================================
+
+// showConfigDialog показывает диалог дополнительных настроек
+func showConfigDialog(window fyne.Window, uiState *UIState) {
+	if uiState.appConfig == nil {
+		uiState.appConfig = getDefaultConfig()
+	}
+	
+	// Создаем поля для дополнительных настроек
+	proxyCheck := widget.NewCheck("Use Proxy", func(checked bool) {
+		uiState.appConfig.UseProxy = checked
+	})
+	proxyCheck.SetChecked(uiState.appConfig.UseProxy)
+	
+	proxyEntry := widget.NewEntry()
+	proxyEntry.SetPlaceHolder("http://proxy:port")
+	proxyEntry.SetText(uiState.appConfig.ProxyAddr)
+	if !uiState.appConfig.UseProxy {
+		proxyEntry.Disable()
+	}
+	
+	autoConnectCheck := widget.NewCheck("Auto-connect on startup", func(checked bool) {
+		uiState.appConfig.AutoConnect = checked
+	})
+	autoConnectCheck.SetChecked(uiState.appConfig.AutoConnect)
+	
+	darkThemeCheck := widget.NewCheck("Dark Theme", func(checked bool) {
+		uiState.appConfig.DarkTheme = checked
+	})
+	darkThemeCheck.SetChecked(uiState.appConfig.DarkTheme)
+	
+	// Кнопка сохранения
+	saveBtn := widget.NewButton("Save Settings", func() {
+		uiState.appConfig.ProxyAddr = proxyEntry.Text
+		SaveConfig(uiState.appConfig, uiState.configFile)
+		appendLog(uiState.logText, "Settings saved successfully!")
+		dialog.ShowInformation("Success", "Configuration saved to "+uiState.configFile, window)
+	})
+	
+	content := container.NewVBox(
+		widget.NewLabel("Additional Settings"),
+		widget.NewSeparator(),
+		proxyCheck,
+		proxyEntry,
+		widget.NewSeparator(),
+		autoConnectCheck,
+		widget.NewSeparator(),
+		darkThemeCheck,
+		widget.NewSeparator(),
+		saveBtn,
+	)
+	
+	d := dialog.NewCustom("Configuration", "Close", content, window)
+	d.Resize(fyne.NewSize(400, 350))
+	d.Show()
+}
+
+// showImportDialog показывает диалог импорта конфигурации
+func showImportDialog(window fyne.Window, uiState *UIState) {
+	importEntry := widget.NewMultiLineEntry()
+	importEntry.SetPlaceHolder("Paste config here (JSON, URL, or server:port:dc:authkey)")
+	importEntry.MultiLine = true
+	importEntry.Wrapping = fyne.TextWrapWord
+	importEntry.SetMinRowsVisible(5)
+	
+	importBtn := widget.NewButton("Import", func() {
+		configStr := importEntry.Text
+		if configStr == "" {
+			dialog.ShowError(errors.New("Please enter configuration data"), window)
+			return
+		}
+		
+		config, err := ImportConfig(configStr)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to import: %w", err), window)
+			return
+		}
+		
+		// Применяем конфигурацию
+		uiState.serverEntry.SetText(config.ServerAddr)
+		uiState.portEntry.SetText(config.Port)
+		uiState.dcEntry.SetText(strconv.Itoa(config.DC))
+		uiState.authKeyEntry.SetText(config.AuthKey)
+		
+		uiState.appConfig = config
+		
+		appendLog(uiState.logText, "Configuration imported successfully!")
+		dialog.ShowInformation("Success", "Configuration imported!\nDon't forget to save it.", window)
+	})
+	
+	content := container.NewVBox(
+		widget.NewLabel("Import Configuration"),
+		widget.NewLabel("Supported formats:"),
+		widget.NewLabel("- JSON"),
+		widget.NewLabel("- mtproto://server:port?dc=X&authkey=Y"),
+		widget.NewLabel("- server:port:dc:authkey"),
+		widget.NewSeparator(),
+		importEntry,
+		importBtn,
+	)
+	
+	d := dialog.NewCustom("Import Config", "Cancel", content, window)
+	d.Resize(fyne.NewSize(500, 400))
+	d.Show()
+}
+
+// showExportDialog показывает диалог экспорта конфигурации
+func showExportDialog(window fyne.Window, uiState *UIState) {
+	if uiState.appConfig == nil {
+		dialog.ShowError(errors.New("No configuration to export"), window)
+		return
+	}
+	
+	// Обновляем конфигурацию из текущих значений
+	uiState.appConfig.ServerAddr = uiState.serverEntry.Text
+	uiState.appConfig.Port = uiState.portEntry.Text
+	dc, _ := strconv.Atoi(uiState.dcEntry.Text)
+	uiState.appConfig.DC = dc
+	uiState.appConfig.AuthKey = uiState.authKeyEntry.Text
+	
+	exportedStr := ExportConfig(uiState.appConfig)
+	
+	exportEntry := widget.NewMultiLineEntry()
+	exportEntry.SetText(exportedStr)
+	exportEntry.MultiLine = true
+	exportEntry.Wrapping = fyne.TextWrapWord
+	exportEntry.SetMinRowsVisible(8)
+	exportEntry.ReadOnly = true
+	
+	saveFileBtn := widget.NewButton("Save to File", func() {
+		currentPath := uiState.configFile
+		if currentPath == "" {
+			var err error
+			currentPath, err = getConfigPath()
+			if err != nil {
+				dialog.ShowError(err, window)
+				return
+			}
+		}
+		
+		err := SaveConfig(uiState.appConfig, currentPath)
+		if err != nil {
+			dialog.ShowError(err, window)
+			return
+		}
+		
+		dialog.ShowInformation("Success", "Configuration saved to:\n"+currentPath, window)
+	})
+	
+	content := container.NewVBox(
+		widget.NewLabel("Export Configuration"),
+		widget.NewSeparator(),
+		widget.NewLabel("JSON format:"),
+		exportEntry,
+		saveFileBtn,
+	)
+	
+	d := dialog.NewCustom("Export Config", "Close", content, window)
+	d.Resize(fyne.NewSize(500, 450))
+	d.Show()
 }
 
 // ============================================================================
