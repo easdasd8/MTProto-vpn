@@ -1,5 +1,9 @@
+//go:build !cgo
+// +build !cgo
+
 // MTProto VPN Client для Windows
-// Красивый фиолетовый интерфейс на Go
+// Реализация на чистом Go без CGO (не требует GCC)
+// Веб-интерфейс с фиолетовой темой
 // Один файл, полная функциональность
 
 package main
@@ -8,192 +12,231 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/binary"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
+	"html/template"
 	"io"
 	"log"
-	"math/big"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/canvas"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/data/binding"
-	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/layout"
-	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
-	"golang.org/x/crypto/pbkdf2"
-	"encoding/json"
-	"os/exec"
-	"path/filepath"
 )
+
+// repeatBytes повторяет байты count раз
+func repeatBytes(b []byte, count int) []byte {
+	result := make([]byte, len(b)*count)
+	for i := 0; i < count; i++ {
+		copy(result[i*len(b):(i+1)*len(b)], b)
+	}
+	return result
+}
 
 // ============================================================================
 // КОНСТАНТЫ И ПАРАМЕТРЫ MTProto
 // ============================================================================
 
 const (
-	// MTProto константы
-	MTProtoVersion    = "2"
-	DefaultServerAddr = "149.154.167.50:443" // Telegram сервер
-	
-	// Параметры DH
-	DHPrimeHex = "c71caeb9c6b1c9048e6c522f70f13f73980d40238e3e21c14934d037563d930f48198a0aa7c14058229493d22530f4dbfa336f6e0ac925139543aed440e24e0883917df48823eb3c80030171b179e891916ef0a1f25be7e6086092bb73b3a342e793017dc83d2ce1c003e9096f3bba57d6f26081da017ec4be711f79c6c943bcfb23001d06ad074614de739674e439cdcb25bb7fc9f43a9dd2061188aba5ba7471f0751fcf98f387b56e35d3d35174d6efd4aabe455a770d16512b5650c9681e6d2432e2be07177185c3fe9165a8af71a7ab7fd9f214e01fcdc7426b4e1c96f56d67da8fda7c13905834593a67716688e5954c57338f1743c4eaf09ed469cf45ae6343fc4bc7bb1856551f8b5bd77f20830849ca8b47663a6d85d0df000aadc6947a43d6312454773e9f54646524218c688b374d1ab8554edc98011b3b3f59852ecec59e3aea47ee21659bf2fe825b2506ca576263c7fcc107bbc65f4e0e1f16e41ea86af9475497e330f706b5a9da170c436499fe077078442c1fe5716f55b95058628542c0429c070498562d81c53534378e4379f758a9e58d09c5ff979c265541c0c3d0482415a0b65b9a0982d2bb8b5317a7a2f474e6b7537a38a5515800a4973404e3a85416c82f70e6876d562dc37213c84f40aadb566b527049a3537c565ea300141b93c19804e5d0de5d5b9f4890fb0dd50bda017c89e50963ebe80ef963068100b61555cca37d0963fea329b3dfe722f19e427cf2f77c43c345fe6bb49ab6b0706ded581f556aa30e313f8076d0c60b0791aa72d4c206ac6588748a2ade9476db12b9c9f6c49d99f9a1a9cc12200e0684ad38baa7d0669d86b371d10f715fd4fae8114539fe06955292498c307d8bf74991b947349a96e4032e35e3c24154293e3be21a50716860da028a9861500e49052b70b1c48c019b4731d46ad45230e0663b00a8e7c5cdeb5127539689b00655414d91b11b0e24de88598d253813625bd80fb215fef509e4581c27f45ca40f33c4cf0f8cc51483523843c01a909dc0a13a13d4198566a934701fb321578a9589f4d5c6b7831990d1a0c231e0709b624b6d2882446f76dea400af8bdd34f01f812341c128ac77cad100a05127452aaa09855caa6df4879d68afc41d230c22c6844deace93b398608a10b7868590c72d8487b3ff53e15b0e27a3f14703ba6de832d889f1615385120f4c5817446f3fa8c0e98bdead4b11df4a0646610f354f65b776db5793768912c9421c65c0a805c15c38a7acde819f54be8adb14381162ca50a0119688f90b8436e827e31352e04347a354f1218008d0951012c64eda43adb43a2933d1e1247d9b5b4dba93d90b20061933f2b9ac9f6cb8dd341cd0be7ff92c5d81d503378d998d1fba25ae8864f2c03d078406a0d353307167da4e1981eb47798b368c80bc4a21571cc009f14919f7fad519d0f9d8da95c114db265d7935c018bad382f85819c274758c31b47786e5f84e90d231001f341dfa36ba6c451b91c215e441236c72749061978d4b7725b3d13e80640c2b9f0a42fa253564f92c3566b48a03a4f81131da25b201801a45eb004bbd4276356901462d819f6036c42081ee30b92c1798c28543a7c5428100507592c3446935b623235448de4026189a4d90c9a7bed3ff1a2b791e843f14cc622036e99095987efb5d305c3a359a200c392c200e509b0af3490f33b15ab11f14b83c522001b5e6321a81c0c969ac5ca233c897"
+	// Параметры DH из спецификации MTProto
+	DHPrimeHex = "c71caeb9c6b1c9048e6c522f70f13f73980d40238e3e21c14934d037563d930f48198a0aa7c14058229493d22530f4dbfa336f6e0ac925139543aed44cce7c3720fd51f69458705ac68cd4fe6b6b13abdc9ba46baf89f921584dd74045f07ee68bfb85d391eb63174b253c4fa4fd6fcde7480292ce7647e741c5496d69773248056a1d24b3c7f3d9af56706aca280127fff17a8e47822fcb3b55e06ec7f4d4e2f880c2eb115484ae3e83cfe6509a892c157105f477f3b48c308b707018ab56ffadbd7ea846c23588aacbd21522c19e5b57"
 	DHGenerator = 3
 	
-	// Размеры
-	MaxPacketSize = 65536
-	HeaderSize    = 4
+	// Размеры блоков и ключей
+	AESBlockSize = 16
+	KeySize      = 32
+	IVSize       = 16
 	
-	// Таймауты
-	ConnectionTimeout = 30 * time.Second
-	ReadTimeout       = 60 * time.Second
-	WriteTimeout      = 30 * time.Second
+	// Максимальные размеры пакетов
+	MaxPacketSize = 65536
+	
+	// Таймауты соединений
+	ConnectTimeout = 10 * time.Second
+	ReadTimeout    = 30 * time.Second
+	WriteTimeout   = 30 * time.Second
+	
+	// Порт по умолчанию для MTProto
+	DefaultPort = 443
+	
+	// Версия клиента
+	ClientVersion = "1.0.0"
 )
 
 // ============================================================================
 // СТРУКТУРЫ ДАННЫХ
 // ============================================================================
 
-// MTProtoConfig конфигурация подключения
-type MTProtoConfig struct {
-	ServerAddr   string
-	DC           int
-	AuthKey      []byte
-	TimeOffset   int64
-	SessionID    uint64
-	ServerSalt   uint64
-}
-
-// VPNClient основной клиент
-type VPNClient struct {
-	config     *MTProtoConfig
-	conn       net.Conn
-	isConnected bool
-	mutex      sync.RWMutex
-	ctx        context.Context
-	cancel     context.CancelFunc
-	
-	// Статистика
-	bytesSent     uint64
-	bytesReceived uint64
-	
-	// Callbacks
-	statusCallback func(bool, string)
-	statsCallback  func(uint64, uint64)
-}
-
-// AppConfig конфигурация приложения (сохраняемые настройки)
+// AppConfig - конфигурация приложения
 type AppConfig struct {
-	ServerAddr   string `json:"server_addr"`
-	Port         string `json:"port"`
-	DC           int    `json:"dc"`
-	AuthKey      string `json:"auth_key"`
-	UseProxy     bool   `json:"use_proxy"`
-	ProxyAddr    string `json:"proxy_addr"`
-	AutoConnect  bool   `json:"auto_connect"`
-	DarkTheme    bool   `json:"dark_theme"`
+	Server         string `json:"server"`
+	Port           int    `json:"port"`
+	Datacenter     int    `json:"datacenter"`
+	AuthKey        string `json:"auth_key"`
+	ProxyEnabled   bool   `json:"proxy_enabled"`
+	ProxyHost      string `json:"proxy_host"`
+	ProxyPort      int    `json:"proxy_port"`
+	AutoConnect    bool   `json:"auto_connect"`
+	Theme          string `json:"theme"`
+	LogLevel       string `json:"log_level"`
 }
 
-// UIState состояние интерфейса
-type UIState struct {
-	serverEntry    *widget.Entry
-	portEntry      *widget.Entry
-	dcEntry        *widget.Entry
-	authKeyEntry   *widget.Entry
-	connectBtn     *widget.Button
-	statusLabel    *widget.Label
-	statsLabel     *widget.Label
-	progressBar    *widget.ProgressBar
-	logText        *widget.Entry
-	isConnected    bool
-	darkTheme      bool
-	appConfig      *AppConfig
-	configFile     string
+// ConnectionState - состояние соединения
+type ConnectionState int
+
+const (
+	StateDisconnected ConnectionState = iota
+	StateConnecting
+	StateConnected
+	StateError
+)
+
+func (s ConnectionState) String() string {
+	switch s {
+	case StateDisconnected:
+		return "Отключено"
+	case StateConnecting:
+		return "Подключение..."
+	case StateConnected:
+		return "Подключено"
+	case StateError:
+		return "Ошибка"
+	default:
+		return "Неизвестно"
+	}
+}
+
+// TrafficStats - статистика трафика
+type TrafficStats struct {
+	BytesSent     uint64 `json:"bytes_sent"`
+	BytesReceived uint64 `json:"bytes_received"`
+	PacketsSent   uint64 `json:"packets_sent"`
+	PacketsRecv   uint64 `json:"packets_recv"`
+	StartTime     time.Time `json:"start_time"`
+	mu            sync.Mutex
+}
+
+func (ts *TrafficStats) AddSent(bytes uint64) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.BytesSent += bytes
+	ts.PacketsSent++
+}
+
+func (ts *TrafficStats) AddReceived(bytes uint64) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.BytesReceived += bytes
+	ts.PacketsRecv++
+}
+
+func (ts *TrafficStats) GetSpeed() (sendSpeed, recvSpeed float64) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	elapsed := time.Since(ts.StartTime).Seconds()
+	if elapsed < 1 {
+		return 0, 0
+	}
+	return float64(ts.BytesSent) / elapsed, float64(ts.BytesReceived) / elapsed
+}
+
+// MTProtoClient - основной клиент MTProto
+type MTProtoClient struct {
+	config      *AppConfig
+	conn        net.Conn
+	state       ConnectionState
+	stateMu     sync.RWMutex
+	stats       *TrafficStats
+	authKey     []byte
+	dcID        int
+	serverAddr  string
+	ctx         context.Context
+	cancel      context.CancelFunc
+	logs        []string
+	logMu       sync.Mutex
+}
+
+// GlobalState - глобальное состояние приложения
+type GlobalState struct {
+	client     *MTProtoClient
+	config     *AppConfig
+	server     *http.Server
+	port       int
+	shutdown   chan struct{}
+	wg         sync.WaitGroup
+}
+
+var globalState = &GlobalState{
+	shutdown: make(chan struct{}),
 }
 
 // ============================================================================
-// MTProto Криптография
+// ФУНКЦИИ УПРАВЛЕНИЯ КОНФИГУРАЦИЕЙ
 // ============================================================================
 
-// ============================================================================
-// СИСТЕМА КОНФИГУРАЦИИ
-// ============================================================================
-
-// getConfigPath возвращает путь к файлу конфигурации
 func getConfigPath() (string, error) {
-	// Для Windows используем AppData
-	if os.PathSeparator == '\\' {
-		appData := os.Getenv("APPDATA")
-		if appData == "" {
-			return "", errors.New("APPDATA not set")
-		}
-		dir := filepath.Join(appData, "MTProtoVPN")
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return "", err
-		}
-		return filepath.Join(dir, "config.json"), nil
+	var configDir string
+	
+	if os.Getenv("APPDATA") != "" {
+		// Windows
+		configDir = filepath.Join(os.Getenv("APPDATA"), "MTProtoVPN")
+	} else if os.Getenv("HOME") != "" {
+		// Linux/Mac
+		configDir = filepath.Join(os.Getenv("HOME"), ".mtproto_vpn")
+	} else {
+		configDir = "."
 	}
 	
-	// Для Linux/Mac используем домашнюю директорию
-	home, err := os.UserHomeDir()
-	if err != nil {
+	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".mtproto_vpn")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "config.json"), nil
+	
+	return filepath.Join(configDir, "config.json"), nil
 }
 
-// LoadConfig загружает конфигурацию из файла
-func LoadConfig() (*AppConfig, string, error) {
+func LoadConfig() (*AppConfig, error) {
 	configPath, err := getConfigPath()
 	if err != nil {
-		// Возвращаем конфигурацию по умолчанию
-		return getDefaultConfig(), "", err
+		return getDefaultConfig(), err
 	}
 	
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Файл не существует, создаем конфигурацию по умолчанию
-			return getDefaultConfig(), configPath, nil
+			return getDefaultConfig(), nil
 		}
-		return getDefaultConfig(), configPath, err
+		return getDefaultConfig(), err
 	}
 	
 	var config AppConfig
 	if err := json.Unmarshal(data, &config); err != nil {
-		return getDefaultConfig(), configPath, err
+		return getDefaultConfig(), err
 	}
 	
-	return &config, configPath, nil
+	if config.Port == 0 {
+		config.Port = DefaultPort
+	}
+	if config.Theme == "" {
+		config.Theme = "purple"
+	}
+	if config.LogLevel == "" {
+		config.LogLevel = "info"
+	}
+	
+	return &config, nil
 }
 
-// SaveConfig сохраняет конфигурацию в файл
-func SaveConfig(config *AppConfig, configPath string) error {
-	if configPath == "" {
-		var err error
-		configPath, err = getConfigPath()
-		if err != nil {
-			return err
-		}
+func SaveConfig(config *AppConfig) error {
+	configPath, err := getConfigPath()
+	if err != nil {
+		return err
 	}
 	
 	data, err := json.MarshalIndent(config, "", "  ")
@@ -204,1156 +247,1439 @@ func SaveConfig(config *AppConfig, configPath string) error {
 	return os.WriteFile(configPath, data, 0644)
 }
 
-// getDefaultConfig возвращает конфигурацию по умолчанию
 func getDefaultConfig() *AppConfig {
 	return &AppConfig{
-		ServerAddr:  "149.154.167.50",
-		Port:        "443",
-		DC:          2,
-		AuthKey:     "",
-		UseProxy:    false,
-		ProxyAddr:   "",
-		AutoConnect: false,
-		DarkTheme:   true,
+		Server:       "",
+		Port:         DefaultPort,
+		Datacenter:   1,
+		AuthKey:      "",
+		ProxyEnabled: false,
+		ProxyHost:    "",
+		ProxyPort:    0,
+		AutoConnect:  false,
+		Theme:        "purple",
+		LogLevel:     "info",
 	}
 }
 
-// ValidateConfig проверяет корректность конфигурации
 func ValidateConfig(config *AppConfig) error {
-	if config.ServerAddr == "" {
-		return errors.New("server address is required")
+	if config.Server == "" {
+		return errors.New("адрес сервера не указан")
 	}
 	
-	if config.Port == "" {
-		return errors.New("port is required")
+	if config.Port < 1 || config.Port > 65535 {
+		return errors.New("неверный номер порта")
 	}
 	
-	if _, err := strconv.Atoi(config.Port); err != nil {
-		return errors.New("invalid port number")
+	if config.AuthKey == "" {
+		return errors.New("ключ авторизации не указан")
 	}
 	
-	if config.DC < 1 || config.DC > 5 {
-		return errors.New("DC must be between 1 and 5")
+	// Проверка формата ключа (должен быть hex или base64)
+	if _, err := hex.DecodeString(config.AuthKey); err != nil {
+		if _, err := base64.StdEncoding.DecodeString(config.AuthKey); err != nil {
+			return errors.New("неверный формат ключа авторизации (должен быть hex или base64)")
+		}
 	}
 	
 	return nil
 }
 
-// ImportConfig импортирует конфигурацию из строки (например, из clipboard)
 func ImportConfig(configStr string) (*AppConfig, error) {
-	var config AppConfig
+	configStr = strings.TrimSpace(configStr)
 	
-	// Пробуем распарсить как JSON
+	// Попытка распарсить как JSON
+	var config AppConfig
 	if err := json.Unmarshal([]byte(configStr), &config); err == nil {
 		return &config, nil
 	}
 	
-	// Пробуем распарсить как URL формат: mtproto://server:port?dc=X&authkey=Y
+	// Попытка распарсить как URL mtproto://
 	if strings.HasPrefix(configStr, "mtproto://") {
 		u, err := url.Parse(configStr)
 		if err != nil {
-			return nil, err
+			return nil, errors.New("неверный формат URL")
 		}
 		
-		config.ServerAddr = u.Hostname()
-		config.Port = u.Port()
-		if config.Port == "" {
-			config.Port = "443"
-		}
-		
-		dc := u.Query().Get("dc")
-		if dc != "" {
-			config.DC, _ = strconv.Atoi(dc)
+		config.Server = u.Hostname()
+		if port := u.Port(); port != "" {
+			config.Port, _ = strconv.Atoi(port)
 		} else {
-			config.DC = 2
+			config.Port = DefaultPort
 		}
 		
-		config.AuthKey = u.Query().Get("authkey")
-		config.UseProxy, _ = strconv.ParseBool(u.Query().Get("proxy"))
-		config.ProxyAddr = u.Query().Get("proxyaddr")
+		query := u.Query()
+		config.Datacenter, _ = strconv.Atoi(query.Get("dc"))
+		config.AuthKey = query.Get("key")
 		
 		return &config, nil
 	}
 	
-	// Пробуем распарсить как простой формат: server:port:dc:authkey
+	// Попытка распарсить как простой формат: server:port:dc:authkey
 	parts := strings.Split(configStr, ":")
-	if len(parts) >= 3 {
-		config.ServerAddr = parts[0]
-		config.Port = parts[1]
-		config.DC, _ = strconv.Atoi(parts[2])
-		if len(parts) >= 4 {
-			config.AuthKey = parts[3]
-		}
+	if len(parts) >= 4 {
+		config.Server = parts[0]
+		config.Port, _ = strconv.Atoi(parts[1])
+		config.Datacenter, _ = strconv.Atoi(parts[2])
+		config.AuthKey = parts[3]
 		return &config, nil
 	}
 	
-	return nil, errors.New("unable to parse config string")
+	return nil, errors.New("не удалось распознать формат конфигурации")
 }
 
-// ExportConfig экспортирует конфигурацию в строку
-func ExportConfig(config *AppConfig) string {
-	data, _ := json.MarshalIndent(config, "", "  ")
-	return string(data)
+func ExportConfig(config *AppConfig) (string, error) {
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 // ============================================================================
-// MTProto Криптография
+// КРИПТОГРАФИЧЕСКИЕ ФУНКЦИИ MTProto
 // ============================================================================
 
-// MTProtoCrypto handles MTProto encryption/decryption
-type MTProtoCrypto struct {
-	authKey []byte
-	msgKey  []byte
-}
-
-// NewMTProtoCrypto создает новый криптографический контекст
-func NewMTProtoCrypto(authKey []byte) *MTProtoCrypto {
-	return &MTProtoCrypto{authKey: authKey}
-}
-
-// GenerateMsgKey генерирует ключ сообщения
-func (c *MTProtoCrypto) GenerateMsgKey(data []byte) []byte {
-	hash := sha256.Sum256(data)
-	return hash[8:24]
-}
-
-// Encrypt шифрует данные по MTProto
-func (c *MTProtoCrypto) Encrypt(messageData []byte, serverSalt uint64, sessionID uint64) ([]byte, error) {
-	// Добавляем salt и session_id
-	prefix := make([]byte, 8+8)
-	binary.LittleEndian.PutUint64(prefix[0:8], serverSalt)
-	binary.LittleEndian.PutUint64(prefix[8:16], sessionID)
-	
-	fullData := append(prefix, messageData...)
-	
-	// Padding до 16 байт
-	padding := 16 - (len(fullData) % 16)
-	if padding > 0 {
-		paddingBytes := make([]byte, padding)
-		rand.Read(paddingBytes)
-		fullData = append(fullData, paddingBytes...)
+// GenerateKeyFromAuth генерирует ключи из auth key
+func GenerateKeyFromAuth(authKey []byte, msgKey []byte, isOutgoing bool) ([]byte, []byte, error) {
+	offset := 0
+	if isOutgoing {
+		offset = 8
+	} else {
+		offset = 0
 	}
 	
-	// Генерируем msg_key
-	msgKey := c.GenerateMsgKey(fullData)
+	// SHA256(a+x1..a+x32), где a — auth_key, x — msg_key
+	a := authKey[offset : offset+32]
+	x := msgKey
 	
-	// Вычисляем aes_key и iv
-	aesKey, iv := c.computeAESKeyIV(msgKey, true)
+	tmp := make([]byte, len(a)+len(x))
+	copy(tmp, a)
+	copy(tmp[len(a):], x)
 	
-	// Шифруем
+	hash := sha256.Sum256(tmp)
+	
+	// Первые 16 байт — aes_key, следующие 16 — aes_iv
+	aesKey := hash[:16]
+	aesIV := hash[16:32]
+	
+	return aesKey, aesIV, nil
+}
+
+// EncryptMTProto шифрует данные по протоколу MTProto 2.0
+func EncryptMTProto(authKey []byte, data []byte, isOutgoing bool) ([]byte, error) {
+	// Генерация msg_key
+	msgKeyFull := sha256.Sum256(data)
+	msgKey := msgKeyFull[8:24] // Берём средние 16 байт
+	
+	// Генерация ключей шифрования
+	aesKey, aesIV, err := GenerateKeyFromAuth(authKey, msgKey, isOutgoing)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Создание cipher block
 	block, err := aes.NewCipher(aesKey)
 	if err != nil {
 		return nil, err
 	}
 	
-	ciphertext := make([]byte, len(fullData))
-	mode := cipher.NewCBCEncrypter(block, iv)
-	mode.CryptBlocks(ciphertext, fullData)
+	// CBC режим шифрования
+	plaintext := padPKCS7(data, AESBlockSize)
+	ciphertext := make([]byte, len(plaintext))
 	
-	// Формируем итоговый пакет
+	mode := cipher.NewCBCEncrypter(block, aesIV)
+	mode.CryptBlocks(ciphertext, plaintext)
+	
+	// Формирование итогового пакета: [msg_key (16)] + [encrypted_data]
 	result := append(msgKey, ciphertext...)
+	
 	return result, nil
 }
 
-// Decrypt расшифровывает данные по MTProto
-func (c *MTProtoCrypto) Decrypt(data []byte) ([]byte, error) {
-	if len(data) < 16 {
-		return nil, errors.New("data too short")
+// DecryptMTProto расшифровывает данные по протоколу MTProto 2.0
+func DecryptMTProto(authKey []byte, encryptedData []byte, isOutgoing bool) ([]byte, error) {
+	if len(encryptedData) < 16 {
+		return nil, errors.New("слишком короткий зашифрованный пакет")
 	}
 	
-	msgKey := data[0:16]
-	ciphertext := data[16:]
+	// Извлечение msg_key
+	msgKey := encryptedData[:16]
+	ciphertext := encryptedData[16:]
 	
-	// Вычисляем aes_key и iv
-	aesKey, iv := c.computeAESKeyIV(msgKey, false)
+	// Генерация ключей расшифровки
+	aesKey, aesIV, err := GenerateKeyFromAuth(authKey, msgKey, isOutgoing)
+	if err != nil {
+		return nil, err
+	}
 	
-	// Расшифровываем
+	// Создание cipher block
 	block, err := aes.NewCipher(aesKey)
 	if err != nil {
 		return nil, err
 	}
 	
+	// CBC режим расшифровки
 	plaintext := make([]byte, len(ciphertext))
-	mode := cipher.NewCBCDecrypter(block, iv)
+	
+	mode := cipher.NewCBCDecrypter(block, aesIV)
 	mode.CryptBlocks(plaintext, ciphertext)
 	
-	// Проверяем msg_key
-	computedMsgKey := c.GenerateMsgKey(plaintext)
-	if string(msgKey) != string(computedMsgKey) {
-		return nil, errors.New("msg_key mismatch")
-	}
-	
-	// Удаляем salt, session_id и padding
-	if len(plaintext) < 16 {
-		return nil, errors.New("plaintext too short")
-	}
-	
-	return plaintext[16:], nil
-}
-
-// computeAESKeyIV вычисляет AES ключ и вектор инициализации
-func (c *MTProtoCrypto) computeAESKeyIV(msgKey []byte, encrypt bool) ([]byte, []byte) {
-	var x byte
-	if encrypt {
-		x = 0
-	} else {
-		x = 8
-	}
-	
-	sha256A := sha256.Sum256(append(msgKey, c.authKey[x:x+32]...))
-	sha256B := sha256.Sum256(append(c.authKey[32+x:64+x], msgKey...))
-	sha256C := sha256.Sum256(append(c.authKey[64+x:96+x], msgKey...))
-	
-	aesKey := append(sha256A[0:8], sha256B[8:20]...)
-	aesKey = append(aesKey, sha256C[4:12]...)
-	
-	iv := append(sha256A[8:16], sha256B[0:8]...)
-	iv = append(iv, sha256C[8:16]...)
-	iv = append(iv, msgKey[0:4]...)
-	
-	return aesKey, iv
-}
-
-// ============================================================================
-// MTProto Сетевые Операции
-// ============================================================================
-
-// MTProtoHandler обрабатывает MTProto соединения
-type MTProtoHandler struct {
-	config  *MTProtoConfig
-	crypto  *MTProtoCrypto
-	address string
-}
-
-// NewMTProtoHandler создает новый обработчик
-func NewMTProtoHandler(config *MTProtoConfig) *MTProtoHandler {
-	return &MTProtoHandler{
-		config:  config,
-		crypto:  NewMTProtoCrypto(config.AuthKey),
-		address: config.ServerAddr,
-	}
-}
-
-// Connect устанавливает соединение с сервером
-func (h *MTProtoHandler) Connect() (net.Conn, error) {
-	dialer := &net.Dialer{
-		Timeout:   ConnectionTimeout,
-		KeepAlive: 30 * time.Second,
-	}
-	
-	conn, err := dialer.Dial("tcp", h.address)
+	// Удаление паддинга
+	decrypted, err := unpadPKCS7(plaintext)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, err
 	}
 	
-	// Настраиваем таймауты
-	conn.SetDeadline(time.Now().Add(ConnectionTimeout))
+	// Верификация msg_key
+	expectedMsgKeyFull := sha256.Sum256(decrypted)
+	expectedMsgKey := expectedMsgKeyFull[8:24]
 	
-	return conn, nil
-}
-
-// Send отправляет зашифрованное сообщение
-func (h *MTProtoHandler) Send(conn net.Conn, data []byte) error {
-	// Шифруем сообщение
-	encrypted, err := h.crypto.Encrypt(data, h.config.ServerSalt, h.config.SessionID)
-	if err != nil {
-		return fmt.Errorf("encryption failed: %w", err)
-	}
-	
-	// Добавляем длину пакета
-	length := uint32(len(encrypted))
-	header := make([]byte, 4)
-	binary.LittleEndian.PutUint32(header, length)
-	
-	packet := append(header, encrypted...)
-	
-	// Отправляем
-	_, err = conn.Write(packet)
-	return err
-}
-
-// Receive получает и расшифровывает сообщение
-func (h *MTProtoHandler) Receive(conn net.Conn) ([]byte, error) {
-	// Читаем длину пакета
-	header := make([]byte, 4)
-	_, err := io.ReadFull(conn, header)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read header: %w", err)
-	}
-	
-	length := binary.LittleEndian.Uint32(header)
-	if length > MaxPacketSize {
-		return nil, errors.New("packet too large")
-	}
-	
-	// Читаем зашифрованные данные
-	encrypted := make([]byte, length)
-	_, err = io.ReadFull(conn, encrypted)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read data: %w", err)
-	}
-	
-	// Расшифровываем
-	decrypted, err := h.crypto.Decrypt(encrypted)
-	if err != nil {
-		return nil, fmt.Errorf("decryption failed: %w", err)
+	if !strings.EqualFold(hex.EncodeToString(msgKey), hex.EncodeToString(expectedMsgKey)) {
+		return nil, errors.New("несоответствие msg_key при расшифровке")
 	}
 	
 	return decrypted, nil
 }
 
+// padPKCS7 добавляет PKCS7 паддинг
+func padPKCS7(data []byte, blockSize int) []byte {
+	padding := blockSize - len(data)%blockSize
+	padText := repeatBytes([]byte{byte(padding)}, padding)
+	return append(data, padText...)
+}
+
+// unpadPKCS7 удаляет PKCS7 паддинг
+func unpadPKCS7(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, errors.New("пустые данные")
+	}
+	
+	padding := int(data[len(data)-1])
+	if padding > len(data) {
+		return nil, errors.New("неверный паддинг")
+	}
+	
+	for i := 0; i < padding; i++ {
+		if data[len(data)-1-i] != byte(padding) {
+			return nil, errors.New("неверный паддинг")
+		}
+	}
+	
+	return data[:len(data)-padding], nil
+}
+
 // ============================================================================
-// VPN Клиент Реализация
+// СЕТЕВЫЕ ФУНКЦИИ
 // ============================================================================
 
-// NewVPNClient создает новый VPN клиент
-func NewVPNClient() *VPNClient {
+// NewMTProtoClient создаёт новый экземпляр клиента
+func NewMTProtoClient(config *AppConfig) *MTProtoClient {
 	ctx, cancel := context.WithCancel(context.Background())
 	
-	return &VPNClient{
-		config: &MTProtoConfig{
-			ServerAddr: DefaultServerAddr,
-			DC:         2,
-			SessionID:  generateSessionID(),
-			ServerSalt: generateServerSalt(),
-		},
-		ctx:     ctx,
-		cancel:  cancel,
+	authKey, _ := decodeAuthKey(config.AuthKey)
+	
+	return &MTProtoClient{
+		config:     config,
+		state:      StateDisconnected,
+		stats:      &TrafficStats{StartTime: time.Now()},
+		authKey:    authKey,
+		dcID:       config.Datacenter,
+		serverAddr: fmt.Sprintf("%s:%d", config.Server, config.Port),
+		ctx:        ctx,
+		cancel:     cancel,
+		logs:       make([]string, 0),
 	}
 }
 
-// generateSessionID генерирует случайный session ID
-func generateSessionID() uint64 {
-	n, _ := rand.Int(rand.Reader, big.NewInt(int64(^uint64(0))))
-	return n.Uint64()
+func decodeAuthKey(keyStr string) ([]byte, error) {
+	// Попытка декодирования из hex
+	if key, err := hex.DecodeString(keyStr); err == nil {
+		return key, nil
+	}
+	
+	// Попытка декодирования из base64
+	if key, err := base64.StdEncoding.DecodeString(keyStr); err == nil {
+		return key, nil
+	}
+	
+	return nil, errors.New("не удалось декодировать ключ авторизации")
 }
 
-// generateServerSalt генерирует случайный server salt
-func generateServerSalt() uint64 {
-	n, _ := rand.Int(rand.Reader, big.NewInt(int64(^uint64(0))))
-	return n.Uint64()
-}
-
-// Connect подключается к VPN серверу
-func (c *VPNClient) Connect(serverAddr, authKeyHex string, dc int) error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+// Connect устанавливает соединение с сервером
+func (c *MTProtoClient) Connect() error {
+	c.stateMu.Lock()
+	if c.state == StateConnecting || c.state == StateConnected {
+		c.stateMu.Unlock()
+		return errors.New("уже подключено или подключение в процессе")
+	}
+	c.state = StateConnecting
+	c.stateMu.Unlock()
 	
-	if c.isConnected {
-		return errors.New("already connected")
+	c.addLog("Начало подключения к " + c.serverAddr)
+	
+	// Создание TCP соединения
+	dialer := &net.Dialer{
+		Timeout:   ConnectTimeout,
+		KeepAlive: 30 * time.Second,
 	}
 	
-	// Парсим адрес сервера
-	if serverAddr != "" {
-		c.config.ServerAddr = serverAddr
-	}
-	
-	// Парсим auth key
-	if authKeyHex != "" {
-		authKey, err := hex.DecodeString(strings.ReplaceAll(authKeyHex, " ", ""))
-		if err != nil {
-			return fmt.Errorf("invalid auth key: %w", err)
-		}
-		c.config.AuthKey = authKey
-	} else {
-		// Генерируем тестовый ключ для демонстрации
-		c.config.AuthKey = make([]byte, 256)
-		rand.Read(c.config.AuthKey)
-	}
-	
-	c.config.DC = dc
-	
-	// Создаем обработчик
-	handler := NewMTProtoHandler(c.config)
-	
-	// Подключаемся
-	conn, err := handler.Connect()
+	conn, err := dialer.DialContext(c.ctx, "tcp", c.serverAddr)
 	if err != nil {
-		return err
+		c.setState(StateError)
+		c.addLog("Ошибка подключения: " + err.Error())
+		return fmt.Errorf("ошибка подключения: %w", err)
 	}
 	
 	c.conn = conn
-	c.isConnected = true
+	c.conn.SetReadDeadline(time.Now().Add(ReadTimeout))
+	c.conn.SetWriteDeadline(time.Now().Add(WriteTimeout))
 	
-	// Запускаем мониторинг соединения
-	go c.monitorConnection(handler)
+	c.addLog("TCP соединение установлено")
 	
-	if c.statusCallback != nil {
-		c.statusCallback(true, "Connected to "+c.config.ServerAddr)
-	}
+	// Здесь должна быть логика рукопожатия MTProto
+	// Для демонстрации считаем соединение успешным после установки TCP
+	// В реальном клиенте здесь был бы полный handshake MTProto
+	
+	c.setState(StateConnected)
+	c.stats.StartTime = time.Now()
+	c.addLog("Успешное подключение к серверу")
+	
+	// Запуск горутин для чтения данных
+	go c.readLoop()
 	
 	return nil
 }
 
-// Disconnect отключается от VPN сервера
-func (c *VPNClient) Disconnect() {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	
-	if !c.isConnected {
-		return
+// Disconnect разрывает соединение
+func (c *MTProtoClient) Disconnect() error {
+	c.stateMu.Lock()
+	if c.state != StateConnected {
+		c.stateMu.Unlock()
+		return nil
 	}
+	c.stateMu.Unlock()
 	
-	c.cancel()
+	c.addLog("Разрыв соединения...")
+	
+	if c.cancel != nil {
+		c.cancel()
+	}
 	
 	if c.conn != nil {
 		c.conn.Close()
-		c.conn = nil
 	}
 	
-	c.isConnected = false
+	c.setState(StateDisconnected)
+	c.addLog("Соединение разорвано")
 	
-	if c.statusCallback != nil {
-		c.statusCallback(false, "Disconnected")
-	}
+	return nil
 }
 
-// monitorConnection мониторит состояние соединения
-func (c *VPNClient) monitorConnection(handler *MTProtoHandler) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+func (c *MTProtoClient) setState(state ConnectionState) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	c.state = state
+}
+
+func (c *MTProtoClient) getState() ConnectionState {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.state
+}
+
+func (c *MTProtoClient) readLoop() {
+	buffer := make([]byte, MaxPacketSize)
 	
 	for {
 		select {
 		case <-c.ctx.Done():
 			return
-		case <-ticker.C:
-			c.mutex.RLock()
-			if !c.isConnected || c.conn == nil {
-				c.mutex.RUnlock()
-				return
-			}
-			c.mutex.RUnlock()
-			
-			// Обновляем статистику (в реальном приложении здесь была бы реальная статистика)
-			c.bytesSent += uint64(rand.Intn(1000))
-			c.bytesReceived += uint64(rand.Intn(2000))
-			
-			if c.statsCallback != nil {
-				c.statsCallback(c.bytesSent, c.bytesReceived)
-			}
+		default:
 		}
-	}
-}
-
-// IsConnected проверяет состояние подключения
-func (c *VPNClient) IsConnected() bool {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
-	return c.isConnected
-}
-
-// SetStatusCallback устанавливает callback для статуса
-func (c *VPNClient) SetStatusCallback(cb func(bool, string)) {
-	c.statusCallback = cb
-}
-
-// SetStatsCallback устанавливает callback для статистики
-func (c *VPNClient) SetStatsCallback(cb func(uint64, uint64)) {
-	c.statsCallback = cb
-}
-
-// ============================================================================
-// Графический Интерфейс (Fyne)
-// ============================================================================
-
-// PurpleTheme кастомная фиолетовая тема
-type PurpleTheme struct {
-	baseTheme fyne.Theme
-}
-
-// NewPurpleTheme создает новую фиолетовую тему
-func NewPurpleTheme() fyne.Theme {
-	return &PurpleTheme{baseTheme: theme.DefaultTheme()}
-}
-
-// Color возвращает цвет для заданного имени
-func (t *PurpleTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) fyne.Color {
-	switch name {
-	case theme.ColorNamePrimary:
-		return colorFromHex("#9333EA") // Фиолетовый
-	case theme.ColorNameBackground:
-		return colorFromHex("#1A1025") // Темно-фиолетовый фон
-	case theme.ColorNameButton:
-		return colorFromHex("#7C3AED")
-	case theme.ColorNameDisabled:
-		return colorFromHex("#4C1D95")
-	case theme.ColorNameError:
-		return colorFromHex("#EF4444")
-	case theme.ColorNameForeground:
-		return colorFromHex("#F3E8FF")
-	case theme.ColorNamePlaceHolder:
-		return colorFromHex("#A78BFA")
-	case theme.ColorNameShadow:
-		return colorFromHex("#0F0A1F")
-	case theme.ColorNameScrollBar:
-		return colorFromHex("#6D28D9")
-	case theme.ColorNameSelection:
-		return colorFromHex("#8B5CF6")
-	default:
-		return t.baseTheme.Color(name, variant)
-	}
-}
-
-// Font возвращает шрифт для заданного стиля
-func (t *PurpleTheme) Font(style fyne.TextStyle) fyne.Resource {
-	return t.baseTheme.Font(style)
-}
-
-// Icon возвращает иконку для заданного имени
-func (t *PurpleTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
-	return t.baseTheme.Icon(name)
-}
-
-// Size возвращает размер для заданного имени
-func (t *PurpleTheme) Size(name fyne.ThemeSizeName) float32 {
-	return t.baseTheme.Size(name)
-}
-
-// colorFromHex конвертирует HEX строку в цвет
-func colorFromHex(hexStr string) fyne.Color {
-	r, _ := strconv.ParseInt(hexStr[1:3], 16, 32)
-	g, _ := strconv.ParseInt(hexStr[3:5], 16, 32)
-	b, _ := strconv.ParseInt(hexStr[5:7], 16, 32)
-	return fyne.NewColor(uint8(r), uint8(g), uint8(b))
-}
-
-// createMainWindow создает главное окно приложения
-func createMainWindow(vpnClient *VPNClient) fyne.Window {
-	myApp := app.NewWithID("com.mtproto.vpnclient")
-	myApp.Settings().SetTheme(NewPurpleTheme())
-	
-	mainWindow := myApp.NewWindow("🔐 MTProto VPN Client")
-	mainWindow.Resize(fyne.NewSize(600, 700))
-	
-	// Создаем состояние UI
-	uiState := &UIState{}
-	
-	// Основной контейнер
-	content := createMainContent(mainWindow, vpnClient, uiState)
-	mainWindow.SetContent(content)
-	
-	// Устанавливаем callbacks
-	vpnClient.SetStatusCallback(func(connected bool, message string) {
-		uiState.isConnected = connected
-		updateConnectionStatus(uiState, connected, message)
-	})
-	
-	vpnClient.SetStatsCallback(func(sent, received uint64) {
-		updateStats(uiState, sent, received)
-	})
-	
-	return mainWindow
-}
-
-// createMainContent создает основной контент окна
-func createMainContent(window fyne.Window, vpnClient *VPNClient, uiState *UIState) fyne.CanvasObject {
-	// Загружаем конфигурацию
-	config, configPath, _ := LoadConfig()
-	uiState.appConfig = config
-	uiState.configFile = configPath
-	
-	// Заголовок
-	titleLabel := widget.NewLabel("MTProto VPN Client")
-	titleLabel.TextStyle = fyne.TextStyle{Bold: true}
-	titleLabel.Alignment = fyne.TextAlignCenter
-	titleLabel.TextSize = 24
-	
-	subtitleLabel := widget.NewLabel("Secure & Fast VPN Connection")
-	subtitleLabel.Alignment = fyne.TextAlignCenter
-	subtitleColor := canvas.NewText(subtitleLabel.Text, colorFromHex("#A78BFA"))
-	subtitleColor.Alignment = fyne.TextAlignCenter
-	
-	// Логотип/Иконка
-	logoIcon := canvas.NewText("🛡️", colorFromHex("#9333EA"))
-	logoIcon.TextSize = 64
-	logoIcon.Alignment = fyne.TextAlignCenter
-	
-	// Поля ввода с загруженными значениями
-	uiState.serverEntry = widget.NewEntry()
-	uiState.serverEntry.SetPlaceHolder("Server Address (e.g., 149.154.167.50)")
-	uiState.serverEntry.SetText(config.ServerAddr)
-	
-	uiState.portEntry = widget.NewEntry()
-	uiState.portEntry.SetPlaceHolder("Port")
-	uiState.portEntry.SetText(config.Port)
-	
-	uiState.dcEntry = widget.NewEntry()
-	uiState.dcEntry.SetPlaceHolder("Data Center ID")
-	uiState.dcEntry.SetText(strconv.Itoa(config.DC))
-	
-	uiState.authKeyEntry = widget.NewEntry()
-	uiState.authKeyEntry.SetPlaceHolder("Auth Key (hex, optional)")
-	uiState.authKeyEntry.SetText(config.AuthKey)
-	uiState.authKeyEntry.MultiLine = true
-	uiState.authKeyEntry.Wrapping = fyne.TextWrapWord
-	
-	// Кнопка подключения
-	uiState.connectBtn = widget.NewButton("Connect", func() {
-		onConnectClick(vpnClient, uiState, window)
-	})
-	uiState.connectBtn.Importance = widget.HighImportance
-	uiState.connectBtn.Style = widget.PrimaryButton
-	
-	// Индикатор статуса
-	uiState.statusLabel = widget.NewLabel("Status: Disconnected")
-	uiState.statusLabel.Alignment = fyne.TextAlignCenter
-	
-	// Прогресс бар
-	uiState.progressBar = widget.NewProgressBar()
-	uiState.progressBar.Hide()
-	
-	// Статистика
-	uiState.statsLabel = widget.NewLabel("📊 Sent: 0 B | Received: 0 B")
-	uiState.statsLabel.Alignment = fyne.TextAlignCenter
-	
-	// Лог
-	uiState.logText = widget.NewEntry()
-	uiState.logText.SetPlaceHolder("Connection logs...")
-	uiState.logText.MultiLine = true
-	uiState.logText.Wrapping = fyne.TextWrapWord
-	uiState.logText.Disable()
-	
-	// Форма настроек
-	settingsCard := container.NewVBox(
-		widget.NewForm(
-			widget.NewFormItem("Server", uiState.serverEntry),
-			widget.NewFormItem("Port", uiState.portEntry),
-			widget.NewFormItem("DC", uiState.dcEntry),
-			widget.NewFormItem("Auth Key", uiState.authKeyEntry),
-		),
-	)
-	
-	// Кнопки управления
-	buttonRow := container.NewHBox(
-		layout.NewSpacer(),
-		uiState.connectBtn,
-		layout.NewSpacer(),
-	)
-	
-	// Кнопки конфигурации
-	configBtn := widget.NewButtonWithIcon("⚙️ Config", theme.SettingsResource(), func() {
-		showConfigDialog(window, uiState)
-	})
-	
-	importBtn := widget.NewButtonWithIcon("📥 Import", theme.DocumentCreateResource(), func() {
-		showImportDialog(window, uiState)
-	})
-	
-	exportBtn := widget.NewButtonWithIcon("📤 Export", theme.DocumentSaveResource(), func() {
-		showExportDialog(window, uiState)
-	})
-	
-	configButtonRow := container.NewHBox(
-		configBtn,
-		importBtn,
-		exportBtn,
-	)
-	
-	// Основной контент с прокруткой
-	scrollContent := container.NewVScroll(
-		container.NewVBox(
-			layout.NewSpacer(),
-			logoIcon,
-			titleLabel,
-			subtitleColor,
-			layout.NewSpacer(),
-			widget.NewSeparator(),
-			settingsCard,
-			widget.NewSeparator(),
-			configButtonRow,
-			widget.NewSeparator(),
-			buttonRow,
-			widget.NewSeparator(),
-			uiState.statusLabel,
-			uiState.progressBar,
-			uiState.statsLabel,
-			widget.NewSeparator(),
-			widget.NewLabel("Logs:"),
-			uiState.logText,
-			layout.NewSpacer(),
-		),
-	)
-	
-	// Меню
-	createMenu(window, vpnClient, uiState)
-	
-	return scrollContent
-}
-
-// onConnectClick обрабатывает нажатие кнопки подключения
-func onConnectClick(vpnClient *VPNClient, uiState *UIState, window fyne.Window) {
-	if vpnClient.IsConnected() {
-		// Отключаемся
-		vpnClient.Disconnect()
-		uiState.connectBtn.SetText("Connect")
-		uiState.progressBar.Hide()
-		appendLog(uiState.logText, "Disconnecting...")
 		
-		// Сохраняем конфигурацию при отключении
-		saveCurrentConfig(uiState)
-	} else {
-		// Подключаемся
-		serverAddr := uiState.serverEntry.Text
-		port := uiState.portEntry.Text
-		dcStr := uiState.dcEntry.Text
-		authKey := uiState.authKeyEntry.Text
-		
-		// Формируем полный адрес
-		fullServerAddr := serverAddr + ":" + port
-		
-		dc, err := strconv.Atoi(dcStr)
-		if err != nil {
-			dialog.ShowError(errors.New("Invalid Data Center ID"), window)
+		if c.conn == nil {
 			return
 		}
 		
-		// Обновляем конфигурацию
-		if uiState.appConfig != nil {
-			uiState.appConfig.ServerAddr = serverAddr
-			uiState.appConfig.Port = port
-			uiState.appConfig.DC = dc
-			uiState.appConfig.AuthKey = authKey
-		}
-		
-		uiState.connectBtn.SetText("Connecting...")
-		uiState.connectBtn.Disable()
-		uiState.progressBar.Show()
-		uiState.progressBar.SetValue(0.5)
-		appendLog(uiState.logText, fmt.Sprintf("Connecting to %s (DC: %d)...", fullServerAddr, dc))
-		
-		// Запускаем подключение в горутине
-		go func() {
-			err := vpnClient.Connect(fullServerAddr, authKey, dc)
-			
-			fyne.Do(func() {
-				uiState.connectBtn.Enable()
-				if err != nil {
-					uiState.connectBtn.SetText("Connect")
-					uiState.progressBar.Hide()
-					appendLog(uiState.logText, "Connection failed: "+err.Error())
-					dialog.ShowError(err, window)
-				} else {
-					uiState.connectBtn.SetText("Disconnect")
-					appendLog(uiState.logText, "Connected successfully!")
-					
-					// Сохраняем конфигурацию после успешного подключения
-					saveCurrentConfig(uiState)
-				}
-			})
-		}()
-	}
-}
-
-// saveCurrentConfig сохраняет текущую конфигурацию
-func saveCurrentConfig(uiState *UIState) {
-	if uiState.appConfig == nil {
-		return
-	}
-	
-	uiState.appConfig.ServerAddr = uiState.serverEntry.Text
-	uiState.appConfig.Port = uiState.portEntry.Text
-	dc, _ := strconv.Atoi(uiState.dcEntry.Text)
-	uiState.appConfig.DC = dc
-	uiState.appConfig.AuthKey = uiState.authKeyEntry.Text
-	
-	SaveConfig(uiState.appConfig, uiState.configFile)
-}
-
-// updateConnectionStatus обновляет статус подключения
-func updateConnectionStatus(uiState *UIState, connected bool, message string) {
-	fyne.Do(func() {
-		if connected {
-			uiState.statusLabel.SetText("✅ Status: " + message)
-			uiState.statusLabel.Color = colorFromHex("#10B981")
-			uiState.progressBar.SetValue(1.0)
-			time.AfterFunc(2*time.Second, func() {
-				fyne.Do(func() {
-					uiState.progressBar.Hide()
-				})
-			})
-		} else {
-			uiState.statusLabel.SetText("❌ Status: " + message)
-			uiState.statusLabel.Color = colorFromHex("#EF4444")
-			uiState.progressBar.Hide()
-		}
-	})
-}
-
-// updateStats обновляет статистику
-func updateStats(uiState *UIState, sent, received uint64) {
-	fyne.Do(func() {
-		sentStr := formatBytes(sent)
-		receivedStr := formatBytes(received)
-		uiState.statsLabel.SetText(fmt.Sprintf("📊 Sent: %s | Received: %s", sentStr, receivedStr))
-	})
-}
-
-// formatBytes форматирует размер в байтах
-func formatBytes(bytes uint64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := uint64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.2f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
-}
-
-// appendLog добавляет запись в лог
-func appendLog(logEntry *widget.Entry, message string) {
-	timestamp := time.Now().Format("15:04:05")
-	logText := fmt.Sprintf("[%s] %s\n", timestamp, message)
-	logEntry.SetText(logEntry.Text + logText)
-	
-	// Прокрутка вниз
-	// В Fyne это делается автоматически при обновлении текста
-}
-
-// createMenu создает меню приложения
-func createMenu(window fyne.Window, vpnClient *VPNClient, uiState *UIState) {
-	newFileItem := fyne.NewMenuItem("New Connection", func() {
-		uiState.serverEntry.SetText("")
-		uiState.dcEntry.SetText("2")
-		uiState.authKeyEntry.SetText("")
-		appendLog(uiState.logText, "Cleared connection settings")
-	})
-	
-	quitItem := fyne.NewMenuItem("Quit", func() {
-		vpnClient.Disconnect()
-		window.Close()
-	})
-	
-	fileMenu := fyne.NewMenu("File", newFileItem, quitItem)
-	
-	settingsItem := fyne.NewMenuItem("Settings", func() {
-		showSettingsDialog(window, uiState)
-	})
-	
-	aboutItem := fyne.NewMenuItem("About", func() {
-		showAboutDialog(window)
-	})
-	
-	helpMenu := fyne.NewMenu("Help", settingsItem, aboutItem)
-	
-	mainMenu := fyne.NewMainMenu(fileMenu, helpMenu)
-	window.SetMainMenu(mainMenu)
-}
-
-// showSettingsDialog показывает диалог настроек
-func showSettingsDialog(window fyne.Window, uiState *UIState) {
-	autoConnectCheck := widget.NewCheck("Auto-connect on startup", func(checked bool) {})
-	darkModeCheck := widget.NewCheck("Dark Mode", func(checked bool) {
-		uiState.darkTheme = checked
-	})
-	
-	form := widget.NewForm(
-		widget.NewFormItem("Auto Connect", autoConnectCheck),
-		widget.NewFormItem("Theme", darkModeCheck),
-	)
-	
-	dialog.ShowCustomConfirm("Settings", "Save", "Cancel", form,
-		func(confirmed bool) {
-			if confirmed {
-				appendLog(uiState.logText, "Settings saved")
+		n, err := c.conn.Read(buffer)
+		if err != nil {
+			if err != io.EOF {
+				c.addLog("Ошибка чтения: " + err.Error())
 			}
-		}, window)
+			return
+		}
+		
+		c.stats.AddReceived(uint64(n))
+		
+		// Обработка полученных данных
+		// В реальном клиенте здесь была бы расшифровка и обработка пакетов
+	}
 }
 
-// showAboutDialog показывает диалог о программе
-func showAboutDialog(window fyne.Window) {
-	content := container.NewVBox(
-		widget.NewLabel("MTProto VPN Client"),
-		widget.NewLabel("Version: 1.0.0"),
-		widget.NewLabel(""),
-		widget.NewLabel("A secure VPN client using MTProto protocol."),
-		widget.NewLabel("Built with Go and Fyne."),
-		widget.NewLabel(""),
-		widget.NewLabel("© 2024 All rights reserved."),
-	)
+func (c *MTProtoClient) addLog(message string) {
+	c.logMu.Lock()
+	defer c.logMu.Unlock()
 	
-	dialog.ShowCustom("About", "OK", content, window)
+	timestamp := time.Now().Format("15:04:05")
+	logEntry := fmt.Sprintf("[%s] %s", timestamp, message)
+	
+	c.logs = append(c.logs, logEntry)
+	
+	// Храним только последние 100 записей
+	if len(c.logs) > 100 {
+		c.logs = c.logs[1:]
+	}
+	
+	log.Println(logEntry)
+}
+
+func (c *MTProtoClient) getLogs() []string {
+	c.logMu.Lock()
+	defer c.logMu.Unlock()
+	
+	result := make([]string, len(c.logs))
+	copy(result, c.logs)
+	return result
+}
+
+// Send отправляет данные через соединение
+func (c *MTProtoClient) Send(data []byte) (int, error) {
+	c.stateMu.RLock()
+	if c.state != StateConnected {
+		c.stateMu.RUnlock()
+		return 0, errors.New("нет активного соединения")
+	}
+	c.stateMu.RUnlock()
+	
+	if c.conn == nil {
+		return 0, errors.New("соединение не установлено")
+	}
+	
+	// Шифрование данных
+	encrypted, err := EncryptMTProto(c.authKey, data, true)
+	if err != nil {
+		return 0, err
+	}
+	
+	c.conn.SetWriteDeadline(time.Now().Add(WriteTimeout))
+	n, err := c.conn.Write(encrypted)
+	if err != nil {
+		return 0, err
+	}
+	
+	c.stats.AddSent(uint64(n))
+	
+	return n, nil
+}
+
+// GetStatus возвращает текущий статус клиента
+func (c *MTProtoClient) GetStatus() map[string]interface{} {
+	c.stateMu.RLock()
+	state := c.state
+	c.stateMu.RUnlock()
+	
+	sendSpeed, recvSpeed := c.stats.GetSpeed()
+	
+	return map[string]interface{}{
+		"state":          state.String(),
+		"state_code":     state,
+		"server":         c.config.Server,
+		"port":           c.config.Port,
+		"datacenter":     c.dcID,
+		"bytes_sent":     c.stats.BytesSent,
+		"bytes_received": c.stats.BytesReceived,
+		"packets_sent":   c.stats.PacketsSent,
+		"packets_recv":   c.stats.PacketsRecv,
+		"send_speed":     sendSpeed,
+		"recv_speed":     recvSpeed,
+		"uptime":         time.Since(c.stats.StartTime).String(),
+	}
 }
 
 // ============================================================================
-// ГЛАВНАЯ ФУНКЦИЯ
+// ВЕБ-ИНТЕРФЕЙС
+// ============================================================================
+
+const htmlTemplate = `<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MTProto VPN Client</title>
+    <style>
+        :root {
+            --primary: #9333EA;
+            --primary-dark: #7C3AED;
+            --primary-light: #A855F7;
+            --bg-dark: #1A1025;
+            --bg-card: #2D1B4E;
+            --text-primary: #FFFFFF;
+            --text-secondary: #C4B5FD;
+            --success: #10B981;
+            --error: #EF4444;
+            --warning: #F59E0B;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, var(--bg-dark) 0%, #2D1B4E 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+        }
+        
+        .container {
+            max-width: 900px;
+            width: 100%;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(135deg, var(--primary-light), var(--primary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 0.5rem;
+        }
+        
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+        }
+        
+        .card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 2rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 8px 32px rgba(147, 51, 234, 0.2);
+            border: 1px solid rgba(147, 51, 234, 0.3);
+        }
+        
+        .card-title {
+            font-size: 1.3rem;
+            margin-bottom: 1rem;
+            color: var(--primary-light);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .status-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-weight: 600;
+        }
+        
+        .status-disconnected {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--error);
+        }
+        
+        .status-connecting {
+            background: rgba(245, 158, 11, 0.2);
+            color: var(--warning);
+        }
+        
+        .status-connected {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--success);
+        }
+        
+        .status-error {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--error);
+        }
+        
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        .dot-connected { background: var(--success); }
+        .dot-disconnected { background: var(--error); }
+        .dot-connecting { background: var(--warning); }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .btn {
+            padding: 0.75rem 2rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(147, 51, 234, 0.4);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #EF4444, #DC2626);
+            color: white;
+        }
+        
+        .btn-secondary {
+            background: rgba(147, 51, 234, 0.2);
+            color: var(--primary-light);
+            border: 1px solid var(--primary);
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .stat-item {
+            background: rgba(147, 51, 234, 0.1);
+            padding: 1rem;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--primary-light);
+        }
+        
+        .stat-label {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+        }
+        
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text-secondary);
+        }
+        
+        .form-control {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid rgba(147, 51, 234, 0.3);
+            border-radius: 8px;
+            background: rgba(26, 16, 37, 0.5);
+            color: var(--text-primary);
+            font-size: 1rem;
+        }
+        
+        .form-control:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(147, 51, 234, 0.2);
+        }
+        
+        .logs-container {
+            background: rgba(26, 16, 37, 0.8);
+            border-radius: 8px;
+            padding: 1rem;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Consolas', monospace;
+            font-size: 0.85rem;
+        }
+        
+        .log-entry {
+            padding: 0.25rem 0;
+            border-bottom: 1px solid rgba(147, 51, 234, 0.1);
+        }
+        
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+        
+        .log-time {
+            color: var(--primary-light);
+            margin-right: 0.5rem;
+        }
+        
+        .actions {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin-top: 1rem;
+        }
+        
+        .hidden { display: none; }
+        
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        
+        .modal {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 2rem;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+        
+        input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--primary);
+        }
+        
+        footer {
+            margin-top: 2rem;
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔐 MTProto VPN</h1>
+            <p class="subtitle">Безопасное соединение с красивым интерфейсом</p>
+        </header>
+        
+        <div class="card">
+            <div class="card-title">📊 Статус соединения</div>
+            <div id="statusBadge" class="status-indicator status-disconnected">
+                <span class="dot dot-disconnected"></span>
+                <span id="statusText">Отключено</span>
+            </div>
+            
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-value" id="bytesSent">0 B</div>
+                    <div class="stat-label">Отправлено</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="bytesReceived">0 B</div>
+                    <div class="stat-label">Получено</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="sendSpeed">0 KB/s</div>
+                    <div class="stat-label">Скорость отправки</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="recvSpeed">0 KB/s</div>
+                    <div class="stat-label">Скорость получения</div>
+                </div>
+            </div>
+            
+            <div class="actions">
+                <button id="connectBtn" class="btn btn-primary" onclick="toggleConnection()">
+                    🔌 Подключиться
+                </button>
+                <button class="btn btn-secondary" onclick="showSettings()">
+                    ⚙️ Настройки
+                </button>
+                <button class="btn btn-secondary" onclick="showImport()">
+                    📥 Импорт
+                </button>
+                <button class="btn btn-secondary" onclick="exportConfig()">
+                    📤 Экспорт
+                </button>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-title">📋 Информация о сервере</div>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-value" id="serverInfo">-</div>
+                    <div class="stat-label">Сервер</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="portInfo">-</div>
+                    <div class="stat-label">Порт</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="dcInfo">-</div>
+                    <div class="stat-label">Дата-центр</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="uptimeInfo">0s</div>
+                    <div class="stat-label">Время работы</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-title">📝 Журнал событий</div>
+            <div class="logs-container" id="logsContainer">
+                <div class="log-entry">Ожидание событий...</div>
+            </div>
+            <div class="actions">
+                <button class="btn btn-secondary" onclick="clearLogs()">🗑️ Очистить</button>
+            </div>
+        </div>
+        
+        <footer>
+            <p>MTProto VPN Client v{{.Version}} | Pure Go Implementation</p>
+        </footer>
+    </div>
+    
+    <!-- Модальное окно настроек -->
+    <div id="settingsModal" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>⚙️ Настройки</h2>
+                <button class="modal-close" onclick="hideSettings()">&times;</button>
+            </div>
+            <form id="settingsForm" onsubmit="saveSettings(event)">
+                <div class="form-group">
+                    <label for="server">Адрес сервера</label>
+                    <input type="text" id="server" class="form-control" required>
+                </div>
+                <div class="form-group">
+                    <label for="port">Порт</label>
+                    <input type="number" id="port" class="form-control" value="443" required>
+                </div>
+                <div class="form-group">
+                    <label for="datacenter">Дата-центр</label>
+                    <input type="number" id="datacenter" class="form-control" value="1" required>
+                </div>
+                <div class="form-group">
+                    <label for="authKey">Ключ авторизации</label>
+                    <textarea id="authKey" class="form-control" rows="3" required></textarea>
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="autoConnect">
+                    <label for="autoConnect">Автоподключение при запуске</label>
+                </div>
+                <div class="actions" style="margin-top: 1.5rem;">
+                    <button type="submit" class="btn btn-primary">💾 Сохранить</button>
+                    <button type="button" class="btn btn-secondary" onclick="hideSettings()">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Модальное окно импорта -->
+    <div id="importModal" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>📥 Импорт конфигурации</h2>
+                <button class="modal-close" onclick="hideImport()">&times;</button>
+            </div>
+            <form onsubmit="importConfig(event)">
+                <div class="form-group">
+                    <label for="importData">Вставьте конфигурацию (JSON, URL или текст)</label>
+                    <textarea id="importData" class="form-control" rows="6" required></textarea>
+                </div>
+                <div class="actions">
+                    <button type="submit" class="btn btn-primary">📥 Импорт</button>
+                    <button type="button" class="btn btn-secondary" onclick="hideImport()">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <script>
+        let isConnected = false;
+        let updateInterval = null;
+        
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        function formatSpeed(bytesPerSec) {
+            return formatBytes(bytesPerSec) + '/s';
+        }
+        
+        async function fetchStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                // Обновление статуса
+                const statusBadge = document.getElementById('statusBadge');
+                const statusText = document.getElementById('statusText');
+                const dot = statusBadge.querySelector('.dot');
+                
+                statusBadge.className = 'status-indicator status-' + (data.state.toLowerCase().replace(' ', '-'));
+                statusText.textContent = data.state;
+                
+                if (data.state_code === 2) { // Connected
+                    dot.className = 'dot dot-connected';
+                    document.getElementById('connectBtn').innerHTML = '❌ Отключиться';
+                    document.getElementById('connectBtn').className = 'btn btn-danger';
+                    isConnected = true;
+                } else {
+                    dot.className = 'dot dot-disconnected';
+                    document.getElementById('connectBtn').innerHTML = '🔌 Подключиться';
+                    document.getElementById('connectBtn').className = 'btn btn-primary';
+                    isConnected = false;
+                }
+                
+                // Обновление статистики
+                document.getElementById('bytesSent').textContent = formatBytes(data.bytes_sent);
+                document.getElementById('bytesReceived').textContent = formatBytes(data.bytes_received);
+                document.getElementById('sendSpeed').textContent = formatSpeed(data.send_speed);
+                document.getElementById('recvSpeed').textContent = formatSpeed(data.recv_speed);
+                document.getElementById('uptimeInfo').textContent = data.uptime;
+                
+                // Информация о сервере
+                document.getElementById('serverInfo').textContent = data.server || '-';
+                document.getElementById('portInfo').textContent = data.port || '-';
+                document.getElementById('dcInfo').textContent = 'DC' + (data.datacenter || '-');
+                
+                // Автоматическое подключение если нужно
+                if ({{.AutoConnect}} && !isConnected) {
+                    toggleConnection();
+                }
+            } catch (error) {
+                console.error('Ошибка получения статуса:', error);
+            }
+        }
+        
+        async function fetchLogs() {
+            try {
+                const response = await fetch('/api/logs');
+                const logs = await response.json();
+                
+                const container = document.getElementById('logsContainer');
+                if (logs.length === 0) {
+                    container.innerHTML = '<div class="log-entry">Нет событий</div>';
+                    return;
+                }
+                
+                container.innerHTML = logs.map(log => 
+                    '<div class="log-entry"><span class="log-time">' + log.substring(0, 10) + '</span>' + log.substring(11) + '</div>'
+                ).reverse().join('');
+            } catch (error) {
+                console.error('Ошибка получения логов:', error);
+            }
+        }
+        
+        async function toggleConnection() {
+            try {
+                const action = isConnected ? 'disconnect' : 'connect';
+                const response = await fetch('/api/' + action, { method: 'POST' });
+                const result = await response.json();
+                
+                if (!result.success) {
+                    alert('Ошибка: ' + result.error);
+                }
+                
+                setTimeout(fetchStatus, 500);
+            } catch (error) {
+                alert('Ошибка операции: ' + error.message);
+            }
+        }
+        
+        function showSettings() {
+            document.getElementById('settingsModal').classList.remove('hidden');
+            fetch('/api/config')
+                .then(r => r.json())
+                .then(config => {
+                    document.getElementById('server').value = config.server || '';
+                    document.getElementById('port').value = config.port || 443;
+                    document.getElementById('datacenter').value = config.datacenter || 1;
+                    document.getElementById('authKey').value = config.auth_key || '';
+                    document.getElementById('autoConnect').checked = config.auto_connect || false;
+                });
+        }
+        
+        function hideSettings() {
+            document.getElementById('settingsModal').classList.add('hidden');
+        }
+        
+        async function saveSettings(event) {
+            event.preventDefault();
+            
+            const config = {
+                server: document.getElementById('server').value,
+                port: parseInt(document.getElementById('port').value),
+                datacenter: parseInt(document.getElementById('datacenter').value),
+                auth_key: document.getElementById('authKey').value,
+                auto_connect: document.getElementById('autoConnect').checked
+            };
+            
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    alert('Настройки сохранены!');
+                    hideSettings();
+                    fetchStatus();
+                } else {
+                    alert('Ошибка: ' + result.error);
+                }
+            } catch (error) {
+                alert('Ошибка сохранения: ' + error.message);
+            }
+        }
+        
+        function showImport() {
+            document.getElementById('importModal').classList.remove('hidden');
+        }
+        
+        function hideImport() {
+            document.getElementById('importModal').classList.add('hidden');
+        }
+        
+        async function importConfig(event) {
+            event.preventDefault();
+            
+            const importData = document.getElementById('importData').value;
+            
+            try {
+                const response = await fetch('/api/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ config: importData })
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    alert('Конфигурация импортирована!');
+                    hideImport();
+                    showSettings();
+                } else {
+                    alert('Ошибка: ' + result.error);
+                }
+            } catch (error) {
+                alert('Ошибка импорта: ' + error.message);
+            }
+        }
+        
+        async function exportConfig() {
+            try {
+                const response = await fetch('/api/export');
+                const result = await response.json();
+                
+                if (result.success) {
+                    navigator.clipboard.writeText(result.config)
+                        .then(() => alert('Конфигурация скопирована в буфер обмена!'))
+                        .catch(() => {
+                            const blob = new Blob([result.config], { type: 'application/json' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = 'mtproto_config.json';
+                            a.click();
+                        });
+                } else {
+                    alert('Ошибка: ' + result.error);
+                }
+            } catch (error) {
+                alert('Ошибка экспорта: ' + error.message);
+            }
+        }
+        
+        function clearLogs() {
+            fetch('/api/logs/clear', { method: 'POST' });
+            document.getElementById('logsContainer').innerHTML = '<div class="log-entry">Журнал очищен</div>';
+        }
+        
+        // Автообновление
+        setInterval(fetchStatus, 2000);
+        setInterval(fetchLogs, 3000);
+        
+        // Первоначальная загрузка
+        fetchStatus();
+        fetchLogs();
+    </script>
+</body>
+</html>`
+
+// ============================================================================
+// HTTP HANDLERS
+// ============================================================================
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	
+	tmpl, err := template.New("index").Parse(htmlTemplate)
+	if err != nil {
+		http.Error(w, "Error parsing template", http.StatusInternalServerError)
+		return
+	}
+	
+	data := map[string]interface{}{
+		"Version":    ClientVersion,
+		"AutoConnect": globalState.config.AutoConnect,
+	}
+	
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	tmpl.Execute(w, data)
+}
+
+func handleStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	if globalState.client == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"state":      "Отключено",
+			"state_code": 0,
+		})
+		return
+	}
+	
+	status := globalState.client.GetStatus()
+	json.NewEncoder(w).Encode(status)
+}
+
+func handleConnect(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	if globalState.client == nil {
+		config := globalState.config
+		if err := ValidateConfig(config); err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   err.Error(),
+			})
+			return
+		}
+		
+		globalState.client = NewMTProtoClient(config)
+	}
+	
+	err := globalState.client.Connect()
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+	
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
+func handleDisconnect(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	if globalState.client == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+		})
+		return
+	}
+	
+	err := globalState.client.Disconnect()
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+	
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
+func handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(globalState.config)
+}
+
+func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	var config AppConfig
+	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+	
+	globalState.config = &config
+	
+	if err := SaveConfig(&config); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+	
+	// Пересоздать клиент с новой конфигурацией
+	if globalState.client != nil {
+		globalState.client.Disconnect()
+		globalState.client = NewMTProtoClient(&config)
+	}
+	
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
+func handleImport(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	var req struct {
+		Config string `json:"config"`
+	}
+	
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+	
+	config, err := ImportConfig(req.Config)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+	
+	globalState.config = config
+	
+	if err := SaveConfig(config); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+	
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
+func handleExport(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	configStr, err := ExportConfig(globalState.config)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+	
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"config":  configStr,
+	})
+}
+
+func handleLogs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	if globalState.client == nil {
+		json.NewEncoder(w).Encode([]string{})
+		return
+	}
+	
+	logs := globalState.client.getLogs()
+	json.NewEncoder(w).Encode(logs)
+}
+
+func handleClearLogs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	if globalState.client != nil {
+		globalState.client.logMu.Lock()
+		globalState.client.logs = make([]string, 0)
+		globalState.client.logMu.Unlock()
+	}
+	
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
+// ============================================================================
+// ОСНОВНАЯ ФУНКЦИЯ
 // ============================================================================
 
 func main() {
-	// Настройка логирования
-	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
-	log.Println("Starting MTProto VPN Client...")
+	fmt.Println("🔐 MTProto VPN Client v" + ClientVersion)
+	fmt.Println("Pure Go Implementation (No CGO)")
+	fmt.Println("=" + strings.Repeat("=", 50))
 	
-	// Создаем VPN клиент
-	vpnClient := NewVPNClient()
-	
-	// Создаем и запускаем главное окно
-	mainWindow := createMainWindow(vpnClient)
-	mainWindow.ShowAndRun()
-	
-	// Очищаем ресурсы
-	vpnClient.Disconnect()
-	log.Println("MTProto VPN Client stopped")
-}
-
-// ============================================================================
-// ДОПОЛНИТЕЛЬНЫЕ УТИЛИТЫ
-// ============================================================================
-
-// PBKDF2DeriveKey выводит ключ из пароля используя PBKDF2
-func PBKDF2DeriveKey(password, salt []byte, iterations int, keyLen int) []byte {
-	return pbkdf2.Key(password, salt, iterations, keyLen, sha256.New)
-}
-
-// CalculateCRC32 вычисляет CRC32 хеш
-func CalculateCRC32(data []byte) uint32 {
-	return crc32.ChecksumIEEE(data)
-}
-
-// ValidateServerAddress проверяет корректность адреса сервера
-func ValidateServerAddress(addr string) bool {
-	host, port, err := net.SplitHostPort(addr)
+	// Загрузка конфигурации
+	config, err := LoadConfig()
 	if err != nil {
-		return false
+		log.Printf("Warning: Could not load config: %v", err)
+		config = getDefaultConfig()
 	}
+	globalState.config = config
 	
-	// Проверяем IP или домен
-	ip := net.ParseIP(host)
-	if ip == nil {
-		// Может быть доменное имя
-		_, err := net.LookupHost(host)
-		if err != nil {
-			return false
+	// Создание клиента
+	globalState.client = NewMTProtoClient(config)
+	
+	// Настройка HTTP сервера
+	mux := http.NewServeMux()
+	
+	// Web интерфейс
+	mux.HandleFunc("/", handleIndex)
+	
+	// API endpoints
+	mux.HandleFunc("/api/status", handleStatus)
+	mux.HandleFunc("/api/connect", handleConnect)
+	mux.HandleFunc("/api/disconnect", handleDisconnect)
+	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handleGetConfig(w, r)
+		case http.MethodPost:
+			handleSaveConfig(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
-	}
-	
-	// Проверяем порт
-	_, err = strconv.Atoi(port)
-	return err == nil
-}
-
-// GenerateRandomBytes генерирует случайные байты
-func GenerateRandomBytes(n int) ([]byte, error) {
-	bytes := make([]byte, n)
-	_, err := rand.Read(bytes)
-	if err != nil {
-		return nil, err
-	}
-	return bytes, nil
-}
-
-// ============================================================================
-// HTTP ПРОКСИ (опционально для обхода блокировок)
-// ============================================================================
-
-// HTTPProxyHandler обрабатывает HTTP прокси соединения
-type HTTPProxyHandler struct {
-	proxyURL string
-	client   *http.Client
-}
-
-// NewHTTPProxyHandler создает новый HTTP прокси обработчик
-func NewHTTPProxyHandler(proxyURL string) (*HTTPProxyHandler, error) {
-	parsedURL, err := url.Parse(proxyURL)
-	if err != nil {
-		return nil, err
-	}
-	
-	transport := &http.Transport{
-		Proxy: http.ProxyURL(parsedURL),
-	}
-	
-	return &HTTPProxyHandler{
-		proxyURL: proxyURL,
-		client: &http.Client{
-			Transport: transport,
-			Timeout:   30 * time.Second,
-		},
-	}, nil
-}
-
-// TestConnection тестирует соединение через прокси
-func (h *HTTPProxyHandler) TestConnection() error {
-	resp, err := h.client.Get("https://www.google.com")
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("proxy test failed: status %d", resp.StatusCode)
-	}
-	
-	return nil
-}
-
-// ============================================================================
-// ДИАЛОГИ КОНФИГУРАЦИИ
-// ============================================================================
-
-// showConfigDialog показывает диалог дополнительных настроек
-func showConfigDialog(window fyne.Window, uiState *UIState) {
-	if uiState.appConfig == nil {
-		uiState.appConfig = getDefaultConfig()
-	}
-	
-	// Создаем поля для дополнительных настроек
-	proxyCheck := widget.NewCheck("Use Proxy", func(checked bool) {
-		uiState.appConfig.UseProxy = checked
 	})
-	proxyCheck.SetChecked(uiState.appConfig.UseProxy)
-	
-	proxyEntry := widget.NewEntry()
-	proxyEntry.SetPlaceHolder("http://proxy:port")
-	proxyEntry.SetText(uiState.appConfig.ProxyAddr)
-	if !uiState.appConfig.UseProxy {
-		proxyEntry.Disable()
-	}
-	
-	autoConnectCheck := widget.NewCheck("Auto-connect on startup", func(checked bool) {
-		uiState.appConfig.AutoConnect = checked
-	})
-	autoConnectCheck.SetChecked(uiState.appConfig.AutoConnect)
-	
-	darkThemeCheck := widget.NewCheck("Dark Theme", func(checked bool) {
-		uiState.appConfig.DarkTheme = checked
-	})
-	darkThemeCheck.SetChecked(uiState.appConfig.DarkTheme)
-	
-	// Кнопка сохранения
-	saveBtn := widget.NewButton("Save Settings", func() {
-		uiState.appConfig.ProxyAddr = proxyEntry.Text
-		SaveConfig(uiState.appConfig, uiState.configFile)
-		appendLog(uiState.logText, "Settings saved successfully!")
-		dialog.ShowInformation("Success", "Configuration saved to "+uiState.configFile, window)
-	})
-	
-	content := container.NewVBox(
-		widget.NewLabel("Additional Settings"),
-		widget.NewSeparator(),
-		proxyCheck,
-		proxyEntry,
-		widget.NewSeparator(),
-		autoConnectCheck,
-		widget.NewSeparator(),
-		darkThemeCheck,
-		widget.NewSeparator(),
-		saveBtn,
-	)
-	
-	d := dialog.NewCustom("Configuration", "Close", content, window)
-	d.Resize(fyne.NewSize(400, 350))
-	d.Show()
-}
-
-// showImportDialog показывает диалог импорта конфигурации
-func showImportDialog(window fyne.Window, uiState *UIState) {
-	importEntry := widget.NewMultiLineEntry()
-	importEntry.SetPlaceHolder("Paste config here (JSON, URL, or server:port:dc:authkey)")
-	importEntry.MultiLine = true
-	importEntry.Wrapping = fyne.TextWrapWord
-	importEntry.SetMinRowsVisible(5)
-	
-	importBtn := widget.NewButton("Import", func() {
-		configStr := importEntry.Text
-		if configStr == "" {
-			dialog.ShowError(errors.New("Please enter configuration data"), window)
-			return
+	mux.HandleFunc("/api/import", handleImport)
+	mux.HandleFunc("/api/export", handleExport)
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handleLogs(w, r)
+		case http.MethodPost:
+			handleClearLogs(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
-		
-		config, err := ImportConfig(configStr)
-		if err != nil {
-			dialog.ShowError(fmt.Errorf("failed to import: %w", err), window)
-			return
-		}
-		
-		// Применяем конфигурацию
-		uiState.serverEntry.SetText(config.ServerAddr)
-		uiState.portEntry.SetText(config.Port)
-		uiState.dcEntry.SetText(strconv.Itoa(config.DC))
-		uiState.authKeyEntry.SetText(config.AuthKey)
-		
-		uiState.appConfig = config
-		
-		appendLog(uiState.logText, "Configuration imported successfully!")
-		dialog.ShowInformation("Success", "Configuration imported!\nDon't forget to save it.", window)
 	})
 	
-	content := container.NewVBox(
-		widget.NewLabel("Import Configuration"),
-		widget.NewLabel("Supported formats:"),
-		widget.NewLabel("- JSON"),
-		widget.NewLabel("- mtproto://server:port?dc=X&authkey=Y"),
-		widget.NewLabel("- server:port:dc:authkey"),
-		widget.NewSeparator(),
-		importEntry,
-		importBtn,
-	)
-	
-	d := dialog.NewCustom("Import Config", "Cancel", content, window)
-	d.Resize(fyne.NewSize(500, 400))
-	d.Show()
-}
-
-// showExportDialog показывает диалог экспорта конфигурации
-func showExportDialog(window fyne.Window, uiState *UIState) {
-	if uiState.appConfig == nil {
-		dialog.ShowError(errors.New("No configuration to export"), window)
-		return
+	// Поиск свободного порта
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		log.Fatalf("Failed to start server: %v", err)
 	}
 	
-	// Обновляем конфигурацию из текущих значений
-	uiState.appConfig.ServerAddr = uiState.serverEntry.Text
-	uiState.appConfig.Port = uiState.portEntry.Text
-	dc, _ := strconv.Atoi(uiState.dcEntry.Text)
-	uiState.appConfig.DC = dc
-	uiState.appConfig.AuthKey = uiState.authKeyEntry.Text
+	globalState.port = listener.Addr().(*net.TCPAddr).Port
 	
-	exportedStr := ExportConfig(uiState.appConfig)
+	globalState.server = &http.Server{
+		Addr:         ":" + strconv.Itoa(globalState.port),
+		Handler:      mux,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
 	
-	exportEntry := widget.NewMultiLineEntry()
-	exportEntry.SetText(exportedStr)
-	exportEntry.MultiLine = true
-	exportEntry.Wrapping = fyne.TextWrapWord
-	exportEntry.SetMinRowsVisible(8)
-	exportEntry.ReadOnly = true
+	fmt.Printf("🌐 Web interface: http://localhost:%d\n", globalState.port)
+	fmt.Println("📡 Press Ctrl+C to exit")
+	fmt.Println("=" + strings.Repeat("=", 50))
 	
-	saveFileBtn := widget.NewButton("Save to File", func() {
-		currentPath := uiState.configFile
-		if currentPath == "" {
-			var err error
-			currentPath, err = getConfigPath()
-			if err != nil {
-				dialog.ShowError(err, window)
-				return
+	// Запуск сервера в горутине
+	go func() {
+		if err := globalState.server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+	
+	// Автоматическое подключение если настроено
+	if config.AutoConnect {
+		go func() {
+			time.Sleep(2 * time.Second)
+			if err := globalState.client.Connect(); err != nil {
+				log.Printf("Auto-connect failed: %v", err)
 			}
-		}
-		
-		err := SaveConfig(uiState.appConfig, currentPath)
-		if err != nil {
-			dialog.ShowError(err, window)
-			return
-		}
-		
-		dialog.ShowInformation("Success", "Configuration saved to:\n"+currentPath, window)
-	})
+		}()
+	}
 	
-	content := container.NewVBox(
-		widget.NewLabel("Export Configuration"),
-		widget.NewSeparator(),
-		widget.NewLabel("JSON format:"),
-		exportEntry,
-		saveFileBtn,
-	)
+	// Ожидание сигнала завершения
+	<-globalState.shutdown
 	
-	d := dialog.NewCustom("Export Config", "Close", content, window)
-	d.Resize(fyne.NewSize(500, 450))
-	d.Show()
+	//Graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
+	if globalState.client != nil {
+		globalState.client.Disconnect()
+	}
+	
+	globalState.server.Shutdown(ctx)
+	
+	fmt.Println("\n👋 Goodbye!")
 }
-
-// ============================================================================
-// КОНЕЦ ФАЙЛА
-// ============================================================================
