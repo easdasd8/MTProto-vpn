@@ -1,0 +1,17 @@
+```
+# Binaries
+*.o
+*.obj
+*.out
+
+# Dependencies
+vendor/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+.env.*
+```
